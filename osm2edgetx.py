@@ -77,7 +77,7 @@ def make_user_agent():
         ip = socket.gethostbyname(socket.gethostname())
     except Exception:
         ip = "unknown"
-    return f"osm-converter/1.0 (timo@t413.com) for {user}/{ip}"
+    return f"osm2edgetx/1.0 (timo@t413.com) for {user}/{ip}"
 
 
 def _fmt_bytes(n):
