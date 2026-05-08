@@ -88,7 +88,7 @@ def _fmt_bytes(n):
     return f"{n / 1024 ** 2:.2f} MB"
 
 
-def fetch_tiles(lat, lon, radius_km, max_zoom, osm_root: pathlib.Path, dry_run: bool):
+def fetch_tiles(lat, lon, radius_km, max_zoom, osm_root: pathlib.Path):
     ua = make_user_agent()
     headers = {"User-Agent": ua}
     z_start = zoom_start_for_radius(radius_km, max_zoom)
@@ -115,10 +115,6 @@ def fetch_tiles(lat, lon, radius_km, max_zoom, osm_root: pathlib.Path, dry_run: 
                     continue
 
                 url = OSM_URL.format(z=z, x=x, y=y)
-                if dry_run:
-                    print(f"    [dry-run] GET {url}")
-                    fetched += 1
-                    continue
 
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 try:
@@ -143,7 +139,7 @@ def fetch_tiles(lat, lon, radius_km, max_zoom, osm_root: pathlib.Path, dry_run: 
 # Convert / resize
 # ---------------------------------------------------------------------------
 
-def process_tiles(osm_root: pathlib.Path, qgis_root: pathlib.Path, max_dim: int, dry_run: bool):
+def process_tiles(osm_root: pathlib.Path, qgis_root: pathlib.Path, max_dim: int):
     converted = skipped = errors = 0
 
     def int_key(p):
@@ -167,11 +163,6 @@ def process_tiles(osm_root: pathlib.Path, qgis_root: pathlib.Path, max_dim: int,
 
                 if dest.exists():
                     skipped += 1
-                    continue
-
-                if dry_run:
-                    print(f"  [dry-run] z={z} x={x} y={y}  {src} -> {dest}")
-                    converted += 1
                     continue
 
                 dest.parent.mkdir(parents=True, exist_ok=True)
@@ -242,8 +233,6 @@ def main():
     fetch_group.add_argument("--zoom", type=int, default=DEFAULT_MAX_ZOOM, metavar="Z",
                              help=f"Maximum zoom level to fetch (default: {DEFAULT_MAX_ZOOM})")
 
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Print what would be done without writing any files")
     parser.add_argument("--noreport", action="store_true", help="Don't print coverage report")
     args = parser.parse_args()
 
@@ -251,8 +240,7 @@ def main():
         parser.error("Nothing to do: specify --fetch and/or --qgis.")
 
     osm_root = pathlib.Path(args.osm)
-    if not args.dry_run:
-        osm_root.mkdir(parents=True, exist_ok=True)
+    osm_root.mkdir(parents=True, exist_ok=True)
 
     # ── FETCH ────────────────────────────────────────────────────────────────
     if args.fetch:
@@ -265,13 +253,12 @@ def main():
         print("=" * 60)
         print("FETCH")
         print("=" * 60)
-        fetch_tiles(lat, lon, args.radius, args.zoom, osm_root, args.dry_run)
+        fetch_tiles(lat, lon, args.radius, args.zoom, osm_root)
 
     # ── CONVERT ──────────────────────────────────────────────────────────────
     if args.qgis:
         qgis_root = pathlib.Path(args.qgis)
-        if not args.dry_run:
-            qgis_root.mkdir(parents=True, exist_ok=True)
+        qgis_root.mkdir(parents=True, exist_ok=True)
 
         print()
         print("=" * 60)
@@ -280,11 +267,9 @@ def main():
         print(f"  OSM source : {osm_root}")
         print(f"  QGIS dest  : {qgis_root}")
         print(f"  Resize to  : {args.resize}px")
-        if args.dry_run:
-            print("  (dry run — no files written)")
         print()
 
-        converted, skipped, errors = process_tiles(osm_root, qgis_root, args.resize, args.dry_run)
+        converted, skipped, errors = process_tiles(osm_root, qgis_root, args.resize)
         print()
         print(f"  Convert done.  converted={converted}  skipped={skipped}  errors={errors}")
 
