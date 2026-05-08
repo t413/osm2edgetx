@@ -195,6 +195,29 @@ def process_tiles(osm_root: pathlib.Path, qgis_root: pathlib.Path, max_dim: int,
 
 
 # ---------------------------------------------------------------------------
+# Coverage report
+# ---------------------------------------------------------------------------
+
+def report_coverage(osm_root: pathlib.Path):
+    if not osm_root.is_dir():
+        return
+    print()
+    print("OSM TILE COVERAGE")
+    for z_dir in sorted(osm_root.iterdir(), key=lambda p: int(p.name) if p.name.isdigit() else -1):
+        if not z_dir.is_dir() or not z_dir.name.isdigit():
+            continue
+        z = int(z_dir.name)
+
+        count = sum(1 for x_dir in z_dir.iterdir() if x_dir.is_dir()
+                    for src in x_dir.glob("*.png") if src.stem.isdigit())
+        if not count:
+            continue
+
+        tile_km = 40075.0 / (2 ** z)          # tile height in km (latitude)
+        area_km2 = count * tile_km * tile_km   # each tile is tile_km × tile_km at equator
+        print(f"  zoom {z:2d}:  {count:5d} tiles,  {area_km2:.1f} sq-km")
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -221,6 +244,7 @@ def main():
 
     parser.add_argument("--dry-run", action="store_true",
                         help="Print what would be done without writing any files")
+    parser.add_argument("--noreport", action="store_true", help="Don't print coverage report")
     args = parser.parse_args()
 
     if not args.fetch and not args.qgis:
@@ -264,6 +288,8 @@ def main():
         print()
         print(f"  Convert done.  converted={converted}  skipped={skipped}  errors={errors}")
 
+    if not args.noreport:
+        report_coverage(osm_root)
     print()
     print("All done.")
 
