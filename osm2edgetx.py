@@ -5,15 +5,11 @@ osm2edgetx.py — Fetch and/or reprocess OSM map tiles for the yaapu EdgeTX map 
   python osm2edgetx.py --help
 """
 
-import argparse, math, sys, time, pathlib
+import argparse, math, sys, time, pathlib, os
 import getpass, socket, urllib.request
 
-try:
-    from PIL import Image
-except ImportError:
-    sys.exit("Pillow is required: pip install Pillow")
-
-OSM_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+OSM_URL_BASE = "https://tile.openstreetmap.org/"
+URL_TEMPLATE = "{z}/{x}/{y}.png"
 DEFAULT_MAX_ZOOM = 17   # OSM goes to 19; 17 is a good drone/RC detail level
 FETCH_DELAY = 0.1       # seconds between requests — be polite to OSM
 
@@ -88,15 +84,18 @@ def _fmt_bytes(n):
     return f"{n / 1024 ** 2:.2f} MB"
 
 
-def fetch_tiles(lat, lon, radius_km, max_zoom, osm_root: pathlib.Path):
+def fetch_tiles(lat, lon, radius_km, max_zoom, osm_root: pathlib.Path, base_url: str, delay_s: float):
     ua = make_user_agent()
     headers = {"User-Agent": ua}
     z_start = zoom_start_for_radius(radius_km, max_zoom)
+    is_local = not base_url.startswith(('http://', 'https://'))
 
     print(f"  User-Agent : {ua}")
     print(f"  Center     : {lat}, {lon}")
     print(f"  Radius     : {radius_km} km")
     print(f"  Zoom range : {z_start}–{max_zoom}")
+    print(f"  Base URL   : {base_url}")
+    print(f"  Delay      : {delay_s * 1000:.0f} ms")
     print()
 
     total_bytes = 0
@@ -114,21 +113,33 @@ def fetch_tiles(lat, lon, radius_km, max_zoom, osm_root: pathlib.Path):
                     skipped += 1
                     continue
 
-                url = OSM_URL.format(z=z, x=x, y=y)
-
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                try:
-                    req = urllib.request.Request(url, headers=headers)
-                    with urllib.request.urlopen(req, timeout=15) as resp:
-                        data = resp.read()
-                    dest.write_bytes(data)
-                    total_bytes += len(data)
-                    fetched += 1
-                    print(f"    + z={z} x={x} y={y}  {len(data)//1024}KB  [total {_fmt_bytes(total_bytes)}]")
-                    time.sleep(FETCH_DELAY)
-                except Exception as exc:
-                    print(f"    ERROR z={z} x={x} y={y}: {exc}", file=sys.stderr)
-                    errors += 1
+                url = os.path.join(base_url, URL_TEMPLATE.format(z=z, x=x, y=y))
+                if is_local:
+                    tile_path = pathlib.Path(url)
+                    if tile_path.exists():
+                        import shutil
+                        shutil.copy2(tile_path, dest)
+                        size = tile_path.stat().st_size
+                        total_bytes += size
+                        fetched += 1
+                        print(f"    + z={z} x={x} y={y}  {size//1024}KB  [total {_fmt_bytes(total_bytes)}]")
+                    else:
+                        print(f"    MISSING z={z} x={x} y={y}", file=sys.stderr)
+                        errors += 1
+                else:
+                    try:
+                        req = urllib.request.Request(url, headers=headers)
+                        with urllib.request.urlopen(req, timeout=15) as resp:
+                            data = resp.read()
+                        dest.write_bytes(data)
+                        total_bytes += len(data)
+                        fetched += 1
+                        print(f"    + z={z} x={x} y={y}  {len(data)//1024}KB  [total {_fmt_bytes(total_bytes)}]")
+                        time.sleep(delay_s)
+                    except Exception as exc:
+                        print(f"    ERROR z={z} x={x} y={y}: {exc}", file=sys.stderr)
+                        errors += 1
 
     print()
     print(f"  Fetch done.  fetched={fetched}  skipped={skipped}  errors={errors}  downloaded={_fmt_bytes(total_bytes)}")
@@ -140,6 +151,11 @@ def fetch_tiles(lat, lon, radius_km, max_zoom, osm_root: pathlib.Path):
 # ---------------------------------------------------------------------------
 
 def process_tiles(osm_root: pathlib.Path, qgis_root: pathlib.Path, max_dim: int):
+    try:
+        from PIL import Image
+    except ImportError:
+        sys.exit("Pillow is required for conversion: pip install Pillow")
+
     converted = skipped = errors = 0
 
     def int_key(p):
@@ -222,8 +238,8 @@ def main():
                         help="Root directory for raw OSM tiles (z/x/y.png)")
     parser.add_argument("--qgis", metavar="PATH",
                         help="Output directory for resized QGIS tiles (optional)")
-    parser.add_argument("--resize", type=int, default=100, metavar="PX",
-                        help="Max tile dimension in pixels for QGIS output (default: 100)")
+    parser.add_argument("--resize", type=int, metavar="PX",
+                        help="Max tile dimension in pixels for QGIS output (required if --qgis is used)")
 
     fetch_group = parser.add_argument_group("fetch options")
     fetch_group.add_argument("--fetch", metavar="LAT,LON",
@@ -232,9 +248,16 @@ def main():
                              help="Fetch radius in km (default: 1)")
     fetch_group.add_argument("--zoom", type=int, default=DEFAULT_MAX_ZOOM, metavar="Z",
                              help=f"Maximum zoom level to fetch (default: {DEFAULT_MAX_ZOOM})")
+    fetch_group.add_argument("--url", default=OSM_URL_BASE, metavar="URL",
+                             help="Base URL or path for tiles, can be local filesysem path")
+    fetch_group.add_argument("--delay", type=int, default=100, metavar="MS",
+                             help="Delay between fetches in milliseconds (default: 100)")
 
     parser.add_argument("--noreport", action="store_true", help="Don't print coverage report")
     args = parser.parse_args()
+
+    if args.qgis and args.resize is None:
+        parser.error("--resize is required when --qgis is specified.")
 
     if not args.fetch and not args.qgis:
         parser.error("Nothing to do: specify --fetch and/or --qgis.")
@@ -253,7 +276,7 @@ def main():
         print("=" * 60)
         print("FETCH")
         print("=" * 60)
-        fetch_tiles(lat, lon, args.radius, args.zoom, osm_root)
+        fetch_tiles(lat, lon, args.radius, args.zoom, osm_root, args.url, (args.delay / 1000.0))
 
     # ── CONVERT ──────────────────────────────────────────────────────────────
     if args.qgis:
