@@ -101,11 +101,17 @@ def fetch_tiles(lat, lon, radius_km, max_zoom, osm_root: pathlib.Path, base_url:
     total_bytes = 0
     fetched = skipped = errors = 0
 
+    is_basemap = lat is None or lon is None
+
     for z in range(z_start, max_zoom + 1):
-        x_min, x_max, y_min, y_max = tiles_for_radius(lat, lon, radius_km, z)
+        if is_basemap:
+            x_min, x_max = 0, (2**z) - 1
+            y_min, y_max = 0, (2**z) - 1
+        else:
+            x_min, x_max, y_min, y_max = tiles_for_radius(lat, lon, radius_km, z)
+
         count = (x_max - x_min + 1) * (y_max - y_min + 1)
         print(f"  z={z:2d}  x=[{x_min}..{x_max}]  y=[{y_min}..{y_max}]  ({count} tiles)")
-
         for x in range(x_min, x_max + 1):
             for y in range(y_min, y_max + 1):
                 dest = osm_root / str(z) / str(x) / f"{y}.png"
@@ -244,6 +250,8 @@ def main():
     fetch_group = parser.add_argument_group("fetch options")
     fetch_group.add_argument("--fetch", metavar="LAT,LON",
                              help="Fetch tiles centred on this coordinate, e.g. '47.6,-122.3'")
+    fetch_group.add_argument("--basemap", action="store_true",
+                             help="Fetch the entire globe (limited to zoom 6 and below)")
     fetch_group.add_argument("--radius", type=float, default=1.0, metavar="KM",
                              help="Fetch radius in km (default: 1)")
     fetch_group.add_argument("--zoom", type=int, default=DEFAULT_MAX_ZOOM, metavar="Z",
@@ -259,17 +267,20 @@ def main():
     if args.qgis and args.resize is None:
         parser.error("--resize is required when --qgis is specified.")
 
-    if not args.fetch and not args.qgis:
-        parser.error("Nothing to do: specify --fetch and/or --qgis.")
+    if not args.fetch and not args.qgis and not args.basemap:
+        parser.error("Nothing to do: specify --fetch, --basemap, and/or --qgis.")
 
     osm_root = pathlib.Path(args.osm)
     osm_root.mkdir(parents=True, exist_ok=True)
 
     # ── FETCH ────────────────────────────────────────────────────────────────
-    if args.fetch:
+    if args.basemap:
+        z_max = min(args.zoom, 6)
+        fetch_tiles(None, None, 0, z_max, osm_root, args.url, (args.delay / 1000.0))
+    elif args.fetch:
         try:
             lat_s, lon_s = args.fetch.split(",")
-            lat, lon = float(lat_s.strip()), float(lon_s.strip())
+            lat, lon = float(lat_s.strip()), float(lon_s.strip()) if lat_s else (None, None)
         except ValueError:
             parser.error("--fetch must be 'LAT,LON', e.g. '47.6,-122.3'")
 
